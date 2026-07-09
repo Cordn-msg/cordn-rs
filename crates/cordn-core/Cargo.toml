@@ -1,0 +1,26 @@
+[package]
+name = "cordn-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core delivery-service state and storage for the cordn MLS coordinator (Rust port)"
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+indexmap = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+schemars = { version = "1", optional = true }
+
+[features]
+default = []
+## Derive `schemars::JsonSchema` on the wire input structs so the rmcp tool
+## `Parameters<T>` extractor can build their JSON schemas in `cordn-server`.
+schemars = ["dep:schemars"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt", "rt-multi-thread", "time", "sync"] }
+hex = "0.4"

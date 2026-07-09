@@ -1,0 +1,45 @@
+[package]
+name = "cordn-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cordn-core = { workspace = true }
+base64 = "0.22"
+thiserror = "2"
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "rt", "macros", "signal", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `tracing` is a plain (non-optional) dep so the rmcp-free adapter can emit
+# abuse-protection rejection logs without the `server` feature.
+tracing = "0.1"
+
+# Server transport + rmcp (Phase B: methods.rs + main.rs). Gated behind the
+# `server` feature so the rmcp-free adapter/config compile and test without
+# pulling in the full rs-sdk. Pinned to the rs-sdk `feat/clientPubkey` branch,
+# which injects the caller's Nostr pubkey into request extensions
+# (`ctx.extensions.get::<ClientPubkey>()`) and rewrites the rmcp request id to
+# the Nostr event id (`ctx.id`). Swap to a git+branch dep or published version
+# before release.
+contextvm-sdk = { path = "../../references/rs-sdk", optional = true }
+rmcp = { version = "1.8", features = ["server", "macros"], optional = true }
+schemars = { version = "1", optional = true }
+anyhow = { version = "1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt", "time", "sync"] }
+hex = "0.4"
+
+[features]
+default = []
+server = ["dep:contextvm-sdk", "dep:rmcp", "dep:schemars", "dep:anyhow", "dep:tracing-subscriber", "cordn-core/schemars"]
+
+[[bin]]
+name = "cordn-server"
+path = "src/main.rs"
+required-features = ["server"]
