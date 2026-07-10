@@ -8,7 +8,7 @@ version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/Besao21/cordn-rs"
+repository = "https://github.com/Cordn-msg/cordn-rs"
 homepage = "https://contextvm.org"
 
 [workspace.dependencies]

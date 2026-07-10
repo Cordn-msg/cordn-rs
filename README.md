@@ -33,7 +33,7 @@ last-resort extension; everything else is stored and returned verbatim.
 ### Prebuilt binary
 
 Download the archive for your platform from the
-[Releases page](https://github.com/Besao21/cordn-rs/releases), verify the
+[Releases page](https://github.com/Cordn-msg/cordn-rs/releases), verify the
 checksum against `SHA256SUMS`, and extract `cordn-server`:
 
 ```bash
@@ -46,7 +46,7 @@ tar xzf cordn-server-<target>.tar.gz
 Requires Rust stable (MSRV **1.88**).
 
 ```bash
-git clone https://github.com/Besao21/cordn-rs.git
+git clone https://github.com/Cordn-msg/cordn-rs.git
 cd cordn-rs
 cargo build --release -p cordn-server --features server
 # binary: target/release/cordn-server
