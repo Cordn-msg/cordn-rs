@@ -6,6 +6,14 @@ release builds). Treat the absolute numbers as directional for this hardware;
 the **methodology** and the **relative ratios** are the stable, comparable part.
 Re-run any section with the command shown; the harnesses are in `bench/`.
 
+> **Optimization pass (2026-07-10).** After the snapshot, the Rust coordinator
+> was cleaned up (`From`-ergonomic storage errors, collapsed cursor branches,
+> dropped dead state) and given **`Arc`-shared fan-out delivery** (one clone
+> into the `Arc`, refcount-bumps per subscriber instead of N full byte-copies)
+> plus a **stripped release binary**. The controlled A/B is in the fan-out
+> section; the snapshot tables below are the pre-optimization baseline (TS code
+> is unchanged since).
+
 The one rule that governs reading these: **the headline depends on the layer.**
 Layer A (coordinator core, no transport) and Layer B (end-to-end over the wire)
 tell different stories and must not be conflated.
@@ -52,6 +60,27 @@ loop pays per request.
   scenario. Per-op sqlite overhead is actually lower in Rust (≈7.4 µs added vs
   TS's ≈10 µs); the bulk-seed deficit was a tight-loop artifact.
 - **In-memory: Rust ≈ 6.8× faster**, sustaining **16.5M deliveries/sec**.
+
+#### `Arc`-shared fan-out (2026-07-10 optimization)
+
+The snapshot row above is pre-optimization (clone-per-subscriber). The fan-out
+path now shares one `Arc<GroupMessageRecord>` across all subscribers. Controlled
+A/B (same session, fanout=8, in-memory, best of runs) across message sizes:
+
+| message size | clone (µs/post) | `Arc` (µs/post) | Arc speedup |
+|---|---|---|---|
+| 32 B   | 0.80 | 0.62 | 1.3× |
+| 256 B  | 1.47 | 0.96 | 1.5× |
+| 1024 B | 3.43 | 1.03 | **3.3×** |
+| 4096 B | 9.30 | 2.47 | **3.8×** |
+
+- The gain **grows with message size** (one allocation + refcount-bumps vs N
+  full byte-copies): at realistic MLS sizes (1–4 KB) fan-out is **3–4× cheaper**.
+- At the snapshot's tiny 32 B synthetic message the gain is small (the clone was
+  already near-free), which is why the headline ratio above barely moves — the
+  win lives at production message sizes.
+- TS passes object references natively, so it never paid the clone cost; this
+  change brings Rust's owned-data fan-out to TS's reference-sharing efficiency.
 
 ### Post→subscriber delivery latency — `bench/core/run-stream-latency.sh`
 
@@ -110,6 +139,12 @@ GNU time `VmHWM`, in-memory backend.
   under load **~5× smaller** (compact records vs V8 per-object overhead).
 - The "load" number includes the bench's transient in-flight buffer; both sides
   buffer the same logical records, so the comparison is fair.
+- **Disk footprint:** the release server binary is **10.7 MB** (LTO +
+  `strip = true`; 12.0 MB unstripped) — a single self-contained binary vs a
+  Node deployment (`node_modules` + runtime). RSS is unaffected by `strip`
+  (symbols aren't resident) and by `Arc` fan-out (retained storage unchanged;
+  the small load-RSS drift vs the snapshot is the bench's serial-drainer buffer
+  artifact, not production-representative).
 
 ---
 
@@ -185,7 +220,7 @@ bench/e2e/run-concurrent.sh      # sustained concurrent throughput (req/s + tail
 ```
 
 Knobs (shared by both sides): `CORDN_BENCH_GROUPS/BACKLOG/LIVE/ITERATIONS`,
-`CORDN_BENCH_FANOUT/MESSAGES/BACKEND`, `CORDN_BENCH_CONCURRENCY`, and for the
+`CORDN_BENCH_FANOUT/MESSAGES/MSG_BYTES/BACKEND`, `CORDN_BENCH_CONCURRENCY`, and for the
 E2E drivers `CORDN_E2E_ITERATIONS/WARMUP/DEADLINE_MS` and
 `CORDN_E2E_CONCURRENCY/DURATION_MS`.
 
@@ -203,6 +238,8 @@ E2E drivers `CORDN_E2E_ITERATIONS/WARMUP/DEADLINE_MS` and
 | What's the **sustained E2E capacity**? | Relay-bound **~180 req/s**; Rust ~1.3× at low load, identical at saturation. |
 | Does it use **less memory**? | Decisively — **~35×** at baseline, **~5×** under load. |
 | Where is Rust *not* ahead? | Bulk sqlite insert loops (`better-sqlite3` is excellent there). |
+| How does **fan-out scale with message size**? | `Arc`-shared delivery: **3–4× cheaper** at 1–4 KB (was clone-per-subscriber). |
+| What's the **server binary footprint**? | **10.7 MB** stripped (LTO); single self-contained binary vs a Node deployment. |
 
 ---
 

@@ -13,7 +13,7 @@ pub mod in_memory;
 pub mod sqlite;
 
 pub use in_memory::InMemoryCoordinatorStorage;
-pub use sqlite::SqliteCoordinatorStorage;
+pub use sqlite::{SqliteCoordinatorStorage, Synchronous};
 
 /// Maximum pending join requests per group. Applies uniformly to all groups
 /// (including those with no message history yet) so a freshly created group can

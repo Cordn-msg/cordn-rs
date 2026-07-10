@@ -20,12 +20,11 @@ tracing = "0.1"
 
 # Server transport + rmcp (Phase B: methods.rs + main.rs). Gated behind the
 # `server` feature so the rmcp-free adapter/config compile and test without
-# pulling in the full rs-sdk. Pinned to the rs-sdk `feat/clientPubkey` branch,
-# which injects the caller's Nostr pubkey into request extensions
-# (`ctx.extensions.get::<ClientPubkey>()`) and rewrites the rmcp request id to
-# the Nostr event id (`ctx.id`). Swap to a git+branch dep or published version
-# before release.
-contextvm-sdk = { path = "../../references/rs-sdk", optional = true }
+# pulling in contextvm-sdk. `contextvm-sdk` injects the caller's Nostr pubkey
+# into request extensions (`ctx.extensions.get::<ClientPubkey>()`) and the full
+# client-signed request event as `InboundEvent`, and rewrites the rmcp request
+# id to the Nostr event id (`ctx.id`).
+contextvm-sdk = { version = "0.2.1", optional = true }
 rmcp = { version = "1.8", features = ["server", "macros"], optional = true }
 schemars = { version = "1", optional = true }
 anyhow = { version = "1", optional = true }

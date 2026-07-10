@@ -1,1 +1,10 @@
 /target
+/references
+node_modules/
+
+# local runtime / dev artifacts
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.local

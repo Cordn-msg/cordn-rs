@@ -48,8 +48,8 @@ use crate::config::{AbuseProtectionConfig, RateLimitConfig};
 const SINK_ACTIVE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
 /// Milliseconds-since-epoch clock, shared with the coordinator so timestamps
-/// stay consistent.
-pub type Now = Arc<dyn Fn() -> i64 + Send + Sync>;
+/// stay consistent. Re-exported from the core so both layers share one type.
+pub use cordn_core::Now;
 
 /// Sink for streaming subscription tools. `methods.rs` adapts the rmcp
 /// `OpenStreamWriter` to this; tests use a collecting sink.
@@ -199,23 +199,26 @@ impl CoordinatorAdapter {
         self.assert_within_rate_limit(client_pubkey, "consumeKeyPackage")?;
         require_non_empty(&input.id, "id")?;
         let record = self.coordinator.consume_key_package(&input.id)?;
-        Ok(ConsumeKeyPackageOutput {
-            key_package: record.map(|r| ConsumedKeyPackage {
-                pk: r.stable_pubkey,
-                kp_ref: r.key_package_ref,
-                last_resort: r.is_last_resort,
-                at: r.published_at,
-                event: serde_json::from_value(r.publication_event).unwrap_or(NostrEvent {
-                    id: String::new(),
-                    pubkey: String::new(),
-                    created_at: 0,
-                    kind: 0,
-                    tags: vec![],
-                    content: String::new(),
-                    sig: String::new(),
-                }),
-            }),
-        })
+        // The stored `publication_event` originated as a validated `NostrEvent`
+        // (serialize→JSON text→Value on publish). A round-trip failure here means
+        // the stored row is corrupt — surface it as an error rather than
+        // silently handing the client a zeroed event.
+        let key_package = record
+            .map(|r| -> Result<ConsumedKeyPackage, AdapterError> {
+                let event: NostrEvent =
+                    serde_json::from_value(r.publication_event).map_err(|e| {
+                        AdapterError::InvalidInput(format!("corrupt publication event: {e}"))
+                    })?;
+                Ok(ConsumedKeyPackage {
+                    pk: r.stable_pubkey,
+                    kp_ref: r.key_package_ref,
+                    last_resort: r.is_last_resort,
+                    at: r.published_at,
+                    event,
+                })
+            })
+            .transpose()?;
+        Ok(ConsumeKeyPackageOutput { key_package })
     }
 
     pub fn list_available_key_packages(

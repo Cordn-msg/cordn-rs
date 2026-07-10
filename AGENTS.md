@@ -20,7 +20,7 @@ Primary implementation areas (target layout):
     under the `schemars` feature for rmcp tool schemas
 - `crates/cordn-server/src/` — ContextVM server bindings and runnable entrypoint.
   The rmcp/transport deps are gated behind the `server` feature so the
-  rmcp-free `adapter` + `config` build and test without the full rs-sdk
+  rmcp-free `adapter` + `config` build and test without the full `contextvm-sdk`
   (`cargo build -p cordn-server --features server` for the bin).
   - `adapter.rs` — `CoordinatorAdapter` (rate limit, quota, identity binding,
     MLS admission, output mapping, streaming loops) — rmcp-free + unit-tested
@@ -110,20 +110,19 @@ These are settled. Do not relitigate them without an explicit change request.
 ### Resolved: `contextvm-sdk` client-pubkey injection
 
 The TS adapter reads the injected caller pubkey and request-event id from
-`extra._meta`. The rs-sdk `feat/clientPubkey` branch provides the Rust
+`extra._meta`. `contextvm-sdk` provides the Rust
 equivalent: the rmcp worker injects a `ClientPubkey` wrapper into request
 `extensions` (re-exported from `contextvm_sdk::transport::server`), and the
 inbound Nostr event id is available as the rmcp request id (`ctx.id`, since the
 worker rewrites the request id to the event id). The adapter (step 5) reads
 `ctx.extensions.get::<ClientPubkey>()` and `ctx.id`, and retrieves the
-`OpenStreamWriter` from extensions for streaming tools. Pin the rs-sdk to that
-branch (or its merged release) when wiring `cordn-server`; the crate currently
-points at it via a path dependency on `references/rs-sdk`.
+`OpenStreamWriter` from extensions for streaming tools. Shipped as
+`contextvm-sdk` 0.2.1 on crates.io; `cordn-server` depends on it by version.
 
 ### Resolved: inbound publication Nostr event (`InboundEvent`)
 
-The rs-sdk worker injects `ClientPubkey` (the SDK-verified signer) and, since
-the `feat/clientPubkey` work, also the full inbound client-signed request event
+The contextvm-sdk worker injects `ClientPubkey` (the SDK-verified signer) and
+the full inbound client-signed request event
 as `InboundEvent(pub nostr::Event)` in request `extensions` (re-exported from
 `contextvm_sdk::transport::server`). For gift-wrapped requests this is the inner,
 signature-verified event (its `pubkey` equals `ClientPubkey`); for plaintext it
@@ -139,8 +138,8 @@ synthetic empty-`id`/`sig` fallback is gone — it broke the TS client's `min(1)
 Zod validation on consume, and `sig` could never be reconstructed server-side
 anyway (the server lacks the client's private key).
 
-The local `references/rs-sdk` checkout carries this feature on `feat/clientPubkey`;
-swap to the upstream git+branch (or published release) once the PR lands.
+Shipped as part of `contextvm-sdk` 0.2.1 on crates.io (the former
+`feat/clientPubkey` branch, merged and released).
 
 ## Setup commands
 
@@ -185,7 +184,15 @@ Four layers — all four are required for the drop-in guarantee.
    wire-shape parity check.
 4. **DB cross-read parity**: a database written by the TS coordinator must be
    readable by `cordn-rs`, and vice-versa. This is the literal proof of the
-   drop-in guarantee.
+   drop-in guarantee. The TS→Rust direction is covered by
+   `crates/cordn-core/tests/db_cross_read.rs`, which opens a DB written by the
+   TS `SqliteCoordinatorStorage` (`tests/fixtures/ts_written.db`, paired with
+   its `ts_written.manifest.json`) and asserts every row — blobs, INTEGER
+   booleans, NULL `join_after_cursor`, the `publication_event_json` column, and
+   per-group cursor allocation — reads back byte-for-byte. Regenerate the
+   fixture pair from `references/cordn` with
+   `npx vitest run scripts/gen_ts_db.test.ts` whenever the TS schema or write
+   path changes.
 
 Commands:
 
@@ -194,6 +201,7 @@ cargo test                          # all tests, all crates
 cargo test -p cordn-core            # core only
 cargo test -p cordn-core storage    # filter by name substring
 cargo test --test storage_parity    # a specific integration-test target
+cargo test --test db_cross_read     # TS-written DB → Rust read (layer 4)
 ```
 
 Test locations and naming:

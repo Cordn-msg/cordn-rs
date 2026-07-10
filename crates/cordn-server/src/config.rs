@@ -2,6 +2,8 @@
 //! port of `references/cordn/src/server/runtimeConfig.ts`. Produces plain
 //! values; `main.rs` turns them into a signer, transport, and coordinator.
 
+use cordn_core::Synchronous;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageBackend {
     Memory,
@@ -12,6 +14,9 @@ pub enum StorageBackend {
 pub struct StorageConfig {
     pub backend: StorageBackend,
     pub sqlite_path: Option<String>,
+    /// SQLite `synchronous` durability pragma. Ignored by the `memory` backend.
+    /// `Normal` (default) is ~30–40× faster than `Full`; see `Synchronous`.
+    pub sqlite_synchronous: Synchronous,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +67,7 @@ impl Default for ServerConfig {
             storage: StorageConfig {
                 backend: StorageBackend::Memory,
                 sqlite_path: None,
+                sqlite_synchronous: Synchronous::Normal,
             },
             abuse_protection: AbuseProtectionConfig {
                 rate_limit: RateLimitConfig {
@@ -93,6 +99,8 @@ pub enum ConfigError {
     InvalidInteger(String),
     #[error("Invalid storage backend in CORDN_STORAGE_BACKEND: expected 'memory' or 'sqlite'")]
     InvalidStorageBackend,
+    #[error("Invalid CORDN_SQLITE_SYNCHRONOUS: expected 'normal' or 'full'")]
+    InvalidSqliteSynchronous,
 }
 
 /// Load `.env` then `.env.local` into the process environment, without
@@ -216,13 +224,23 @@ pub fn read_server_config(
         "memory" => StorageConfig {
             backend: StorageBackend::Memory,
             sqlite_path: None,
+            sqlite_synchronous: Synchronous::Normal,
         },
-        "sqlite" => StorageConfig {
-            backend: StorageBackend::Sqlite,
-            sqlite_path: Some(
-                opt_string(env, "CORDN_SQLITE_PATH").unwrap_or_else(|| "./cordn.sqlite".into()),
-            ),
-        },
+        "sqlite" => {
+            let sqlite_synchronous = match opt_string(env, "CORDN_SQLITE_SYNCHRONOUS") {
+                None => Synchronous::Normal,
+                Some(raw) => {
+                    Synchronous::from_config(&raw).ok_or(ConfigError::InvalidSqliteSynchronous)?
+                }
+            };
+            StorageConfig {
+                backend: StorageBackend::Sqlite,
+                sqlite_path: Some(
+                    opt_string(env, "CORDN_SQLITE_PATH").unwrap_or_else(|| "./cordn.sqlite".into()),
+                ),
+                sqlite_synchronous,
+            }
+        }
         _ => return Err(ConfigError::InvalidStorageBackend),
     };
 
@@ -285,6 +303,7 @@ mod tests {
         assert_eq!(c.server_name, "cordn-server");
         assert!(!c.is_announced);
         assert_eq!(c.storage.backend, StorageBackend::Memory);
+        assert_eq!(c.storage.sqlite_synchronous, Synchronous::Normal);
         assert_eq!(c.abuse_protection.rate_limit.refill_per_minute, 500);
         assert_eq!(c.abuse_protection.rate_limit.burst, 160);
         assert_eq!(c.abuse_protection.rate_limit.idle_ttl_ms, 3_600_000);
@@ -298,6 +317,7 @@ mod tests {
             ("CORDN_RELAY_URLS", "wss://a.test, wss://b.test"),
             ("CORDN_STORAGE_BACKEND", "sqlite"),
             ("CORDN_SQLITE_PATH", "/tmp/x.sqlite"),
+            ("CORDN_SQLITE_SYNCHRONOUS", "full"),
             ("CORDN_RATE_LIMIT_ENABLED", "false"),
             ("CORDN_MAX_KEY_PACKAGES_PER_IDENTITY", "7"),
             ("CORDN_MAX_AGE_DAYS", "1"),
@@ -307,6 +327,7 @@ mod tests {
         assert_eq!(c.relay_urls, vec!["wss://a.test", "wss://b.test"]);
         assert_eq!(c.storage.backend, StorageBackend::Sqlite);
         assert_eq!(c.storage.sqlite_path.as_deref(), Some("/tmp/x.sqlite"));
+        assert_eq!(c.storage.sqlite_synchronous, Synchronous::Full);
         assert!(!c.abuse_protection.rate_limit.enabled);
         assert_eq!(c.abuse_protection.key_package_quota.max_per_identity, 7);
         assert_eq!(c.max_age_ms, 86_400_000);
@@ -317,6 +338,18 @@ mod tests {
     fn rejects_bad_backend() {
         let e = env(&[("CORDN_STORAGE_BACKEND", "redis")]);
         assert!(read_server_config(&e).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_synchronous() {
+        let e = env(&[
+            ("CORDN_STORAGE_BACKEND", "sqlite"),
+            ("CORDN_SQLITE_SYNCHRONOUS", "turbo"),
+        ]);
+        assert!(matches!(
+            read_server_config(&e),
+            Err(ConfigError::InvalidSqliteSynchronous)
+        ));
     }
 
     #[test]

@@ -66,8 +66,14 @@ fn read_pos_env(name: &str, fallback: usize) -> usize {
 
 // ponytail: fixed-size synthetic payload; revisit if results look size-sensitive.
 fn opaque_message(index: usize) -> Vec<u8> {
-    let mut bytes = vec![0u8; 32];
-    bytes[31] = (index % 251) as u8;
+    let size = std::env::var("CORDN_BENCH_MSG_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32)
+        .max(1);
+    let mut bytes = vec![0u8; size];
+    let last = bytes.len() - 1;
+    bytes[last] = (index % 251) as u8;
     bytes
 }
 

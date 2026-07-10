@@ -29,7 +29,7 @@ pub use mls_parse::{
 pub use ratelimit::{TokenBucketRateLimitConfig, TokenBucketRateLimiter};
 pub use storage::{
     partition_consumed_join_requests, AppendGroupMessageParams, CoordinatorStorage,
-    InMemoryCoordinatorStorage, SqliteCoordinatorStorage, StorageError,
+    InMemoryCoordinatorStorage, SqliteCoordinatorStorage, StorageError, Synchronous,
     MAX_PENDING_JOIN_REQUESTS_PER_GROUP,
 };
 pub use types::{

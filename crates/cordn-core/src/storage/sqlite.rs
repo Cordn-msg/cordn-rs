@@ -23,6 +23,56 @@ use crate::types::{
     WelcomeQueueRecord,
 };
 
+/// `?`-ergonomic conversion: stringify the driver error into `Backend`, matching
+/// the prior explicit `.map_err` at every site. Kept here (not in `mod.rs`) so
+/// the trait module stays free of any driver coupling.
+impl From<rusqlite::Error> for StorageError {
+    fn from(e: rusqlite::Error) -> Self {
+        StorageError::Backend(e.to_string())
+    }
+}
+
+/// JSON (de)serialization of `publication_event_json` surfaces as a backend error.
+impl From<serde_json::Error> for StorageError {
+    fn from(e: serde_json::Error) -> Self {
+        StorageError::Backend(e.to_string())
+    }
+}
+
+/// SQLite `synchronous` durability mode for the write path.
+///
+/// `Normal` is the WAL production default: crash-safe (no DB corruption), but
+/// a power loss can lose the last committed transaction — ~30–40× faster than
+/// `Full` because it skips the per-commit `fsync`. `Full` fsyncs every commit
+/// for maximum durability; choose it only when no committed message may be
+/// lost. This is a runtime-pragma choice, not a schema/wire change, so the
+/// TS/Rust DB cross-read guarantee is unaffected (TS leaves it unset/default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Synchronous {
+    Normal,
+    Full,
+}
+
+impl Synchronous {
+    fn pragma(self) -> &'static str {
+        match self {
+            Self::Normal => "NORMAL",
+            Self::Full => "FULL",
+        }
+    }
+
+    /// Parse the `CORDN_SQLITE_SYNCHRONOUS` value: "normal" | "full"
+    /// (case-insensitive). Returns `None` for anything else so `config` can
+    /// fail fast on a bad value.
+    pub fn from_config(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 const KEY_PACKAGE_WELCOME_JOIN_SCHEMA_SQL: &str = "
     CREATE TABLE IF NOT EXISTS key_packages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,48 +152,44 @@ pub struct SqliteCoordinatorStorage {
 impl SqliteCoordinatorStorage {
     /// Open a storage backend at `path`. `None` (or `":memory:"`) opens an
     /// in-memory database.
-    pub fn open(path: Option<&str>) -> Result<Self, StorageError> {
-        let conn = Connection::open(path.unwrap_or(":memory:"))
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        Self::init(&conn)?;
+    pub fn open(path: Option<&str>, synchronous: Synchronous) -> Result<Self, StorageError> {
+        let conn = Connection::open(path.unwrap_or(":memory:"))?;
+        Self::init(&conn, synchronous)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
 
-    /// Convenience for tests: an isolated in-memory database.
+    /// Convenience for tests: an isolated in-memory database (`synchronous` is
+    /// irrelevant for `:memory:`, so the `Normal` default is fine).
     pub fn open_in_memory() -> Result<Self, StorageError> {
-        Self::open(None)
+        Self::open(None, Synchronous::Normal)
     }
 
-    fn init(conn: &Connection) -> Result<(), StorageError> {
-        let backend = |e: rusqlite::Error| StorageError::Backend(e.to_string());
-
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
-        )
-        .map_err(backend)?;
-        conn.execute_batch(KEY_PACKAGE_WELCOME_JOIN_SCHEMA_SQL)
-            .map_err(backend)?;
+    fn init(conn: &Connection, synchronous: Synchronous) -> Result<(), StorageError> {
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; \
+             PRAGMA busy_timeout = 5000; PRAGMA synchronous = {};",
+            synchronous.pragma()
+        ))?;
+        conn.execute_batch(KEY_PACKAGE_WELCOME_JOIN_SCHEMA_SQL)?;
 
         // Migration: add join_after_cursor for efficient post-join sync.
         if !has_column(conn, "welcomes", "join_after_cursor")? {
             conn.execute(
                 "ALTER TABLE welcomes ADD COLUMN join_after_cursor INTEGER",
                 [],
-            )
-            .map_err(backend)?;
+            )?;
         }
 
-        conn.execute_batch(GROUP_SCHEMA_SQL).map_err(backend)?;
+        conn.execute_batch(GROUP_SCHEMA_SQL)?;
 
         // Migration: add encrypted column (0 = legacy/unencrypted, 1 = encrypted).
         if !has_column(conn, "group_messages", "encrypted")? {
             conn.execute(
                 "ALTER TABLE group_messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0",
                 [],
-            )
-            .map_err(backend)?;
+            )?;
         }
         // Migration: drop ephemeral_sender_pubkey (session-scoped transport
         // handle the coordinator never read; routing is by gid).
@@ -151,13 +197,11 @@ impl SqliteCoordinatorStorage {
             conn.execute(
                 "ALTER TABLE group_messages DROP COLUMN ephemeral_sender_pubkey",
                 [],
-            )
-            .map_err(backend)?;
+            )?;
         }
         // Migration: drop epoch (sinceEpoch filtering moved to client-side).
         if has_column(conn, "group_messages", "epoch")? {
-            conn.execute("ALTER TABLE group_messages DROP COLUMN epoch", [])
-                .map_err(backend)?;
+            conn.execute("ALTER TABLE group_messages DROP COLUMN epoch", [])?;
         }
         // Migration: drop latest_handshake_epoch (stale-handshake rejection
         // removed when the coordinator became fully opaque).
@@ -165,8 +209,7 @@ impl SqliteCoordinatorStorage {
             conn.execute(
                 "ALTER TABLE group_routing DROP COLUMN latest_handshake_epoch",
                 [],
-            )
-            .map_err(backend)?;
+            )?;
         }
 
         Ok(())
@@ -178,15 +221,11 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Stor
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, StorageError> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>("name"))
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>("name"))?;
     let mut out = Vec::new();
     for row in rows {
-        out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+        out.push(row?);
     }
     Ok(out)
 }
@@ -241,21 +280,21 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         record: PublishedKeyPackageRecord,
     ) -> Result<PublishedKeyPackageRecord, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let pub_json = serde_json::to_string(&record.publication_event)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO key_packages (stable_pubkey, key_package_ref, key_package_bytes, is_last_resort, published_at, publication_event_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
+        let pub_json = serde_json::to_string(&record.publication_event)?;
+        {
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO key_packages (stable_pubkey, key_package_ref, key_package_bytes, is_last_resort, published_at, publication_event_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            stmt.execute(params![
                 &record.stable_pubkey,
                 &record.key_package_ref,
                 &record.key_package_bytes,
                 record.is_last_resort as i64,
                 record.published_at,
                 pub_json,
-            ],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
+            ])?;
+        }
         Ok(record)
     }
 
@@ -264,34 +303,26 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         stable_pubkey: &str,
     ) -> Result<Vec<PublishedKeyPackageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare_cached(&format!(
-                "SELECT {KP_COLUMNS} FROM key_packages WHERE stable_pubkey = ?1 ORDER BY id ASC"
-            ))
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        let rows = stmt
-            .query_map(params![stable_pubkey], row_to_key_package)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {KP_COLUMNS} FROM key_packages WHERE stable_pubkey = ?1 ORDER BY id ASC"
+        ))?;
+        let rows = stmt.query_map(params![stable_pubkey], row_to_key_package)?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+            out.push(row?);
         }
         Ok(out)
     }
 
     fn list_all_key_packages(&self) -> Result<Vec<PublishedKeyPackageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare_cached(&format!(
-                "SELECT {KP_COLUMNS} FROM key_packages ORDER BY id ASC"
-            ))
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        let rows = stmt
-            .query_map([], row_to_key_package)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {KP_COLUMNS} FROM key_packages ORDER BY id ASC"
+        ))?;
+        let rows = stmt.query_map([], row_to_key_package)?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+            out.push(row?);
         }
         Ok(out)
     }
@@ -301,13 +332,10 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         key_package_ref: &str,
     ) -> Result<Option<PublishedKeyPackageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare_cached(KP_SELECT_BY_REF_SQL)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let mut stmt = conn.prepare_cached(KP_SELECT_BY_REF_SQL)?;
         let record = stmt
             .query_row(params![key_package_ref], row_to_key_package)
-            .optional()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            .optional()?;
         Ok(record)
     }
 
@@ -317,23 +345,20 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
     ) -> Result<Option<PublishedKeyPackageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
         let record: Option<PublishedKeyPackageRecord> = {
-            let mut stmt = conn
-                .prepare_cached(KP_SELECT_BY_REF_SQL)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = conn.prepare_cached(KP_SELECT_BY_REF_SQL)?;
             stmt.query_row(params![key_package_ref], row_to_key_package)
-                .optional()
-                .map_err(|e| StorageError::Backend(e.to_string()))?
+                .optional()?
         };
         let Some(record) = record else {
             return Ok(None);
         };
         // key_package_ref is UNIQUE, so deleting by ref is equivalent to the TS
         // delete-by-id without exposing the row id on the record.
-        conn.execute(
-            "DELETE FROM key_packages WHERE key_package_ref = ?1",
-            params![key_package_ref],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
+        {
+            let mut stmt =
+                conn.prepare_cached("DELETE FROM key_packages WHERE key_package_ref = ?1")?;
+            stmt.execute(params![key_package_ref])?;
+        }
         Ok(Some(record))
     }
 
@@ -342,56 +367,41 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         identifier: &str,
     ) -> Result<Option<PublishedKeyPackageRecord>, StorageError> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let tx = conn.transaction()?;
 
         // 1. by exact key-package ref.
         let by_ref: Option<PublishedKeyPackageRecord> = {
-            let mut stmt = tx
-                .prepare(KP_SELECT_BY_REF_SQL)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = tx.prepare_cached(KP_SELECT_BY_REF_SQL)?;
             stmt.query_row(params![identifier], row_to_key_package)
-                .optional()
-                .map_err(|e| StorageError::Backend(e.to_string()))?
+                .optional()?
         };
         if let Some(record) = by_ref {
             if !record.is_last_resort {
-                tx.execute(
-                    "DELETE FROM key_packages WHERE key_package_ref = ?1",
-                    params![identifier],
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+                let mut stmt =
+                    tx.prepare_cached("DELETE FROM key_packages WHERE key_package_ref = ?1")?;
+                stmt.execute(params![identifier])?;
             }
-            tx.commit()
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            tx.commit()?;
             return Ok(Some(record));
         }
 
         // 2. fall back to treating the identifier as a stable identity.
         let by_identity: Option<PublishedKeyPackageRecord> = {
-            let mut stmt = tx
-                .prepare(KP_CONSUME_BY_IDENTITY_SQL)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = tx.prepare_cached(KP_CONSUME_BY_IDENTITY_SQL)?;
             stmt.query_row(params![identifier], row_to_key_package)
-                .optional()
-                .map_err(|e| StorageError::Backend(e.to_string()))?
+                .optional()?
         };
         if let Some(record) = by_identity {
             if !record.is_last_resort {
-                tx.execute(
-                    "DELETE FROM key_packages WHERE key_package_ref = ?1",
-                    params![&record.key_package_ref],
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+                let mut stmt =
+                    tx.prepare_cached("DELETE FROM key_packages WHERE key_package_ref = ?1")?;
+                stmt.execute(params![&record.key_package_ref])?;
             }
-            tx.commit()
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            tx.commit()?;
             return Ok(Some(record));
         }
 
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        tx.commit()?;
         Ok(None)
     }
 
@@ -400,18 +410,19 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         record: WelcomeQueueRecord,
     ) -> Result<WelcomeQueueRecord, StorageError> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO welcomes (target_stable_pubkey, key_package_reference, welcome_bytes, created_at, join_after_cursor) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
+        {
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO welcomes (target_stable_pubkey, key_package_reference, welcome_bytes, created_at, join_after_cursor) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            stmt.execute(params![
                 &record.target_stable_pubkey,
                 &record.key_package_reference,
                 &record.welcome_bytes,
                 record.created_at,
                 record.join_after_cursor,
-            ],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
+            ])?;
+        }
         Ok(record)
     }
 
@@ -421,34 +432,32 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         consumed: &[ConsumedWelcomeRef],
     ) -> Result<Vec<WelcomeQueueRecord>, StorageError> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        for c in consumed {
-            tx.execute(
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
                 "DELETE FROM welcomes WHERE target_stable_pubkey = ?1 AND key_package_reference = ?2 AND created_at = ?3",
-                params![target_stable_pubkey, &c.key_package_reference, c.created_at],
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            )?;
+            for c in consumed {
+                stmt.execute(params![
+                    target_stable_pubkey,
+                    &c.key_package_reference,
+                    c.created_at
+                ])?;
+            }
         }
         let out = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT target_stable_pubkey, key_package_reference, welcome_bytes, created_at, join_after_cursor \
-                     FROM welcomes WHERE target_stable_pubkey = ?1 ORDER BY id ASC",
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let rows = stmt
-                .query_map(params![target_stable_pubkey], row_to_welcome)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = tx.prepare_cached(
+                "SELECT target_stable_pubkey, key_package_reference, welcome_bytes, created_at, join_after_cursor \
+                 FROM welcomes WHERE target_stable_pubkey = ?1 ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map(params![target_stable_pubkey], row_to_welcome)?;
             let mut out = Vec::new();
             for row in rows {
-                out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+                out.push(row?);
             }
             out
         };
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        tx.commit()?;
         Ok(out)
     }
 
@@ -457,12 +466,10 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             return Ok(0);
         }
         let conn = self.conn.lock().unwrap();
-        let n = conn
-            .execute(
-                "DELETE FROM welcomes WHERE created_at < ?1",
-                params![max_age_threshold],
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let n = {
+            let mut stmt = conn.prepare_cached("DELETE FROM welcomes WHERE created_at < ?1")?;
+            stmt.execute(params![max_age_threshold])?
+        };
         Ok(n)
     }
 
@@ -471,64 +478,62 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         record: JoinRequestRecord,
     ) -> Result<JoinRequestRecord, StorageError> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let tx = conn.transaction()?;
 
-        let existing: Option<()> = tx
-            .query_row(
+        let existing: Option<()> = {
+            let mut stmt = tx.prepare_cached(
                 "SELECT 1 FROM join_requests WHERE group_id = ?1 AND requester_stable_pubkey = ?2 LIMIT 1",
+            )?;
+            stmt.query_row(
                 params![&record.group_id, &record.requester_stable_pubkey],
                 |_| Ok(()),
             )
-            .optional()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            .optional()?
+        };
 
         if existing.is_some() {
             // Re-request: refresh in place (see updateJoinRequestOnReRequestStatement).
-            tx.execute(
-                "UPDATE join_requests SET key_package_ref = ?1, created_at = ?2 \
-                 WHERE group_id = ?3 AND requester_stable_pubkey = ?4",
-                params![
+            {
+                let mut stmt = tx.prepare_cached(
+                    "UPDATE join_requests SET key_package_ref = ?1, created_at = ?2 \
+                     WHERE group_id = ?3 AND requester_stable_pubkey = ?4",
+                )?;
+                stmt.execute(params![
                     &record.key_package_ref,
                     record.created_at,
                     &record.group_id,
                     &record.requester_stable_pubkey,
-                ],
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-            tx.commit()
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+                ])?;
+            }
+            tx.commit()?;
             return Ok(record);
         }
 
         // New row — enforce the per-group cap only on the insert path. A refresh
         // above doesn't add a row, so it must not hit the cap.
-        let count: i64 = tx
-            .query_row(
-                "SELECT COUNT(*) FROM join_requests WHERE group_id = ?1",
-                params![&record.group_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let count: i64 = {
+            let mut stmt =
+                tx.prepare_cached("SELECT COUNT(*) FROM join_requests WHERE group_id = ?1")?;
+            stmt.query_row(params![&record.group_id], |row| row.get(0))?
+        };
         if (count as usize) >= MAX_PENDING_JOIN_REQUESTS_PER_GROUP {
             // tx drops → rollback.
             return Err(StorageError::TooManyPendingJoinRequests);
         }
 
-        tx.execute(
-            "INSERT INTO join_requests (group_id, requester_stable_pubkey, key_package_ref, created_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO join_requests (group_id, requester_stable_pubkey, key_package_ref, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            stmt.execute(params![
                 &record.group_id,
                 &record.requester_stable_pubkey,
                 &record.key_package_ref,
                 record.created_at,
-            ],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            ])?;
+        }
+        tx.commit()?;
         Ok(record)
     }
 
@@ -538,34 +543,28 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         consumed: &[ConsumedJoinRequestRef],
     ) -> Result<Vec<JoinRequestRecord>, StorageError> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        for c in consumed {
-            tx.execute(
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
                 "DELETE FROM join_requests WHERE group_id = ?1 AND requester_stable_pubkey = ?2 AND created_at = ?3",
-                params![group_id, &c.requester_stable_pubkey, c.created_at],
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            )?;
+            for c in consumed {
+                stmt.execute(params![group_id, &c.requester_stable_pubkey, c.created_at])?;
+            }
         }
         let out = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT group_id, requester_stable_pubkey, key_package_ref, created_at \
-                     FROM join_requests WHERE group_id = ?1 ORDER BY id ASC",
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let rows = stmt
-                .query_map(params![group_id], row_to_join_request)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = tx.prepare_cached(
+                "SELECT group_id, requester_stable_pubkey, key_package_ref, created_at \
+                 FROM join_requests WHERE group_id = ?1 ORDER BY id ASC",
+            )?;
+            let rows = stmt.query_map(params![group_id], row_to_join_request)?;
             let mut out = Vec::new();
             for row in rows {
-                out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+                out.push(row?);
             }
             out
         };
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        tx.commit()?;
         Ok(out)
     }
 
@@ -578,20 +577,19 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             return Ok(Vec::new());
         }
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let tx = conn.transaction()?;
 
         // Retire consumed requests for each group before the fetch.
         let consumed_by_group = partition_consumed_join_requests(consumed);
-        for group_id in group_ids {
-            if let Some(list) = consumed_by_group.get(group_id) {
-                for c in list {
-                    tx.execute(
-                        "DELETE FROM join_requests WHERE group_id = ?1 AND requester_stable_pubkey = ?2 AND created_at = ?3",
-                        params![group_id, &c.requester_stable_pubkey, c.created_at],
-                    )
-                    .map_err(|e| StorageError::Backend(e.to_string()))?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "DELETE FROM join_requests WHERE group_id = ?1 AND requester_stable_pubkey = ?2 AND created_at = ?3",
+            )?;
+            for group_id in group_ids {
+                if let Some(list) = consumed_by_group.get(group_id) {
+                    for c in list {
+                        stmt.execute(params![group_id, &c.requester_stable_pubkey, c.created_at])?;
+                    }
                 }
             }
         }
@@ -612,20 +610,15 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
                 params_vec.push(SqlValue::Integer(i as i64));
                 params_vec.push(SqlValue::Text(gid.clone()));
             }
-            let mut stmt = tx
-                .prepare(&sql)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let rows = stmt
-                .query_map(params_from_iter(params_vec.iter()), row_to_join_request)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
+            let mut stmt = tx.prepare_cached(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params_vec.iter()), row_to_join_request)?;
             let mut out = Vec::new();
             for row in rows {
-                out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+                out.push(row?);
             }
             out
         };
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        tx.commit()?;
         Ok(out)
     }
 
@@ -634,12 +627,11 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             return Ok(0);
         }
         let conn = self.conn.lock().unwrap();
-        let n = conn
-            .execute(
-                "DELETE FROM join_requests WHERE created_at < ?1",
-                params![max_age_threshold],
-            )
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let n = {
+            let mut stmt =
+                conn.prepare_cached("DELETE FROM join_requests WHERE created_at < ?1")?;
+            stmt.execute(params![max_age_threshold])?
+        };
         Ok(n)
     }
 
@@ -648,18 +640,18 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         params: AppendGroupMessageParams,
     ) -> Result<GroupMessageRecord, StorageError> {
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let tx = conn.transaction()?;
 
-        let last: Option<i64> = tx
-            .query_row(
+        // Cached prepared statements: the three write-path statements are
+        // prepared once per connection and reused across posts, saving the
+        // reparse/replan that `execute` pays on every call.
+        let last: Option<i64> = {
+            let mut stmt = tx.prepare_cached(
                 "SELECT last_message_cursor FROM group_routing WHERE group_id = ?1",
-                params![&params.group_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            )?;
+            stmt.query_row(params![&params.group_id], |row| row.get(0))
+                .optional()?
+        };
         let cursor = last.unwrap_or(0) + 1;
         // ponytail: i64 ceiling is far beyond any group's lifetime; the TS
         // Number.isSafeInteger guard has no practical analogue here.
@@ -669,26 +661,27 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             ));
         }
 
-        tx.execute(
-            "INSERT INTO group_messages (cursor, group_id, opaque_message, created_at, encrypted) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO group_messages (cursor, group_id, opaque_message, created_at, encrypted) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            stmt.execute(params![
                 cursor,
                 &params.group_id,
                 &params.opaque_message,
                 params.created_at,
                 params.encrypted as i64,
-            ],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
-        tx.execute(
-            "INSERT INTO group_routing (group_id, last_message_cursor) VALUES (?1, ?2) \
-             ON CONFLICT(group_id) DO UPDATE SET last_message_cursor = excluded.last_message_cursor",
-            params![&params.group_id, cursor],
-        )
-        .map_err(|e| StorageError::Backend(e.to_string()))?;
-        tx.commit()
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+            ])?;
+        }
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO group_routing (group_id, last_message_cursor) VALUES (?1, ?2) \
+                 ON CONFLICT(group_id) DO UPDATE SET last_message_cursor = excluded.last_message_cursor",
+            )?;
+            stmt.execute(params![&params.group_id, cursor])?;
+        }
+        tx.commit()?;
 
         Ok(GroupMessageRecord {
             cursor,
@@ -705,37 +698,18 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         after_cursor: Option<i64>,
     ) -> Result<Vec<GroupMessageRecord>, StorageError> {
         let conn = self.conn.lock().unwrap();
-        let out = if let Some(ac) = after_cursor {
-            let mut stmt = conn
-                .prepare_cached(
-                    "SELECT cursor, group_id, opaque_message, created_at, encrypted \
-                     FROM group_messages WHERE group_id = ?1 AND cursor > ?2 ORDER BY cursor ASC",
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let rows = stmt
-                .query_map(params![group_id, ac], row_to_group_message)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
-            }
-            out
-        } else {
-            let mut stmt = conn
-                .prepare_cached(
-                    "SELECT cursor, group_id, opaque_message, created_at, encrypted \
-                     FROM group_messages WHERE group_id = ?1 ORDER BY cursor ASC",
-                )
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let rows = stmt
-                .query_map(params![group_id], row_to_group_message)
-                .map_err(|e| StorageError::Backend(e.to_string()))?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
-            }
-            out
-        };
+        // Cursors start at 1, so `cursor > 0` is equivalent to "no filter" — one
+        // statement serves both the Some- and None-cursor cases.
+        let ac = after_cursor.unwrap_or(0);
+        let mut stmt = conn.prepare_cached(
+            "SELECT cursor, group_id, opaque_message, created_at, encrypted \
+                 FROM group_messages WHERE group_id = ?1 AND cursor > ?2 ORDER BY cursor ASC",
+        )?;
+        let rows = stmt.query_map(params![group_id, ac], row_to_group_message)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -764,15 +738,11 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             params_vec.push(SqlValue::Text(g.group_id.clone()));
             params_vec.push(SqlValue::Integer(g.after_cursor.unwrap_or(0)));
         }
-        let mut stmt = conn
-            .prepare_cached(&sql)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
-        let rows = stmt
-            .query_map(params_from_iter(params_vec.iter()), row_to_group_message)
-            .map_err(|e| StorageError::Backend(e.to_string()))?;
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params_from_iter(params_vec.iter()), row_to_group_message)?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| StorageError::Backend(e.to_string()))?);
+            out.push(row?);
         }
         Ok(out)
     }
@@ -853,7 +823,7 @@ mod tests {
         }
 
         // Opening the storage runs the migrations.
-        let storage = SqliteCoordinatorStorage::open(Some(&path)).unwrap();
+        let storage = SqliteCoordinatorStorage::open(Some(&path), Synchronous::Normal).unwrap();
         let conn = storage.conn.lock().unwrap();
 
         let gm_cols = table_columns(&conn, "group_messages").unwrap();

@@ -4,11 +4,11 @@ members = ["crates/cordn-core", "crates/cordn-server"]
 exclude = ["references"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/ContextVM/cordn-rs"
+repository = "https://github.com/Besao21/cordn-rs"
 homepage = "https://contextvm.org"
 
 [workspace.dependencies]
@@ -18,3 +18,4 @@ cordn-server = { path = "crates/cordn-server" }
 [profile.release]
 lto = true
 codegen-units = 1
+strip = true

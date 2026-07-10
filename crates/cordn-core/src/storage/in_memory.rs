@@ -21,7 +21,6 @@ use crate::types::{
 
 struct GroupLog {
     next_cursor: i64,
-    last_message_cursor: i64,
     messages: Vec<GroupMessageRecord>,
 }
 
@@ -29,7 +28,6 @@ impl GroupLog {
     fn new() -> Self {
         Self {
             next_cursor: 1,
-            last_message_cursor: 0,
             messages: Vec::new(),
         }
     }
@@ -408,7 +406,6 @@ impl CoordinatorStorage for InMemoryCoordinatorStorage {
             encrypted,
         };
         log.messages.push(record.clone());
-        log.last_message_cursor = cursor;
         Ok(record)
     }
 
@@ -418,17 +415,17 @@ impl CoordinatorStorage for InMemoryCoordinatorStorage {
         after_cursor: Option<i64>,
     ) -> Result<Vec<GroupMessageRecord>, StorageError> {
         let inner = self.inner.lock().unwrap();
+        // Cursors start at 1, so `cursor > 0` is equivalent to "no filter".
+        let ac = after_cursor.unwrap_or(0);
         let out = inner
             .groups
             .get(group_id)
-            .map(|log| match after_cursor {
-                Some(ac) => log
-                    .messages
+            .map(|log| {
+                log.messages
                     .iter()
                     .filter(|m| m.cursor > ac)
                     .cloned()
-                    .collect::<Vec<_>>(),
-                None => log.messages.to_vec(),
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         Ok(out)
@@ -441,17 +438,16 @@ impl CoordinatorStorage for InMemoryCoordinatorStorage {
         let inner = self.inner.lock().unwrap();
         let mut out = Vec::new();
         for g in groups {
+            let ac = g.after_cursor.unwrap_or(0);
             let messages = inner
                 .groups
                 .get(&g.group_id)
-                .map(|log| match g.after_cursor {
-                    Some(ac) => log
-                        .messages
+                .map(|log| {
+                    log.messages
                         .iter()
                         .filter(|m| m.cursor > ac)
                         .cloned()
-                        .collect::<Vec<_>>(),
-                    None => log.messages.to_vec(),
+                        .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
             out.extend(messages);

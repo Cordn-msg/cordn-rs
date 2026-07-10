@@ -19,9 +19,15 @@ use cordn_server::config::{self, StorageBackend};
 use cordn_server::methods::CordnServer;
 
 fn build_transport_config(cfg: &config::ServerConfig) -> NostrServerTransportConfig {
-    let server_info = ServerInfo::default()
+    let mut server_info = ServerInfo::default()
         .with_name(cfg.server_name.clone())
         .with_about(cfg.server_about.clone().unwrap_or_default());
+    // `website` is optional in TS (runtimeConfig) and the SDK field is
+    // `Option<String>` with `skip_serializing_if = None`, so only set it when
+    // configured — an empty string would serialize onto the announcement.
+    if let Some(website) = &cfg.server_website {
+        server_info = server_info.with_website(website.clone());
+    }
     NostrServerTransportConfig::default()
         .with_relay_urls(cfg.relay_urls.clone())
         .with_announced_server(cfg.is_announced)
@@ -68,7 +74,7 @@ async fn main() -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| "./cordn.sqlite".into());
             Arc::new(
-                SqliteCoordinatorStorage::open(Some(&path))
+                SqliteCoordinatorStorage::open(Some(&path), cfg.storage.sqlite_synchronous)
                     .with_context(|| format!("opening sqlite store at {path}"))?,
             )
         }
