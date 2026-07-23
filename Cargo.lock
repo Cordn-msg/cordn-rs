@@ -322,6 +322,7 @@ dependencies = [
  "contextvm-sdk",
  "cordn-core",
  "hex",
+ "nostr",
  "rmcp",
  "schemars",
  "serde",

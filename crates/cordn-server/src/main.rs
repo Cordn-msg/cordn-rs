@@ -35,8 +35,16 @@ fn build_transport_config(cfg: &config::ServerConfig) -> NostrServerTransportCon
         .with_gift_wrap_mode(GiftWrapMode::Optional)
         .with_server_info(server_info)
         // CEP-22 oversized transfer (large key packages) is enabled by default;
-        // CEP-41 open-stream (subscription tools) must be opted in.
-        .with_open_stream(OpenStreamConfig::default().with_enabled(true))
+        // CEP-41 open-stream (subscription tools) must be opted in. The
+        // keepalive windows mirror the TS defaults: the SDK's 30s+20s=50s
+        // default is too short for cordn's long-lived subscription streams
+        // (which can sit idle between group messages), so bump to 120s total.
+        .with_open_stream(
+            OpenStreamConfig::default()
+                .with_enabled(true)
+                .with_idle_timeout_ms(60_000)
+                .with_probe_timeout_ms(60_000),
+        )
 }
 
 #[tokio::main]
@@ -62,7 +70,8 @@ async fn main() -> Result<()> {
         Some(hex) => signer::from_sk(hex).context("CORDN_SERVER_PRIVATE_KEY")?,
         None => signer::generate(),
     };
-    let server_pubkey = signer.public_key().to_hex();
+    let public_key = signer.public_key();
+    let server_pubkey = public_key.to_hex();
 
     let now: Now = default_now();
     let storage: Arc<dyn cordn_core::CoordinatorStorage> = match cfg.storage.backend {
@@ -92,7 +101,8 @@ async fn main() -> Result<()> {
         now,
     ));
 
-    print_banner(&server_pubkey, &cfg.relay_urls);
+    let nprofile = build_nprofile(&public_key, &cfg.relay_urls);
+    print_banner(&server_pubkey, &nprofile, &cfg.relay_urls);
 
     let transport = NostrServerTransport::new(signer, build_transport_config(&cfg))
         .await
@@ -140,7 +150,18 @@ async fn shutdown_signal() {
     }
 }
 
-fn print_banner(server_pubkey: &str, relay_urls: &[String]) {
+fn build_nprofile(public_key: &nostr::PublicKey, relay_urls: &[String]) -> String {
+    use nostr::nips::nip19::{Nip19Profile, ToBech32};
+    let relays: Vec<nostr::RelayUrl> = relay_urls
+        .iter()
+        .filter_map(|r| nostr::RelayUrl::parse(r).ok())
+        .collect();
+    Nip19Profile::new(*public_key, relays)
+        .to_bech32()
+        .unwrap_or_default()
+}
+
+fn print_banner(server_pubkey: &str, nprofile: &str, relay_urls: &[String]) {
     let rule: String = "═".repeat(68);
     let relay_lines = if relay_urls.is_empty() {
         "     (none configured)".to_string()
@@ -151,11 +172,15 @@ fn print_banner(server_pubkey: &str, relay_urls: &[String]) {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let coordinator_url = format!("https://cordn.net/chat/coordinators?c={nprofile}");
     println!("\n  {rule}");
     println!("   🔑  CORDN COORDINATOR — Server Public Key");
     println!("  {rule}\n");
     println!("   pubkey    {server_pubkey}");
+    println!("   nprofile  {nprofile}");
     println!("\n   📡  relays");
     println!("{relay_lines}");
+    println!("\n   🌐  add in cordn.net");
+    println!("     {coordinator_url}");
     println!();
 }

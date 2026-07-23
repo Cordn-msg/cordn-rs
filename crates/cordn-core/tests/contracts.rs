@@ -93,26 +93,19 @@ fn pending_welcome_omits_absent_after() {
 }
 
 #[test]
-fn group_message_omits_absent_encrypted() {
+fn group_message_serializes_exactly_to_wire_shape() {
+    // Parity with the TS `groupMessageSchema = { cursor, gid, msg_64, at }`:
+    // the encrypted-only refactor (cordn 0.5) dropped the `encrypted` field
+    // from the wire, so the struct must serialize to exactly these four keys.
     let m = GroupMessage {
         cursor: 1,
         gid: "g".into(),
         msg_64: "m".into(),
         at: 1,
-        encrypted: None,
     };
     assert_keys(
         &serde_json::to_value(&m).unwrap(),
         &["cursor", "gid", "msg_64", "at"],
-    );
-
-    let m2 = GroupMessage {
-        encrypted: Some(true),
-        ..m
-    };
-    assert_keys(
-        &serde_json::to_value(&m2).unwrap(),
-        &["cursor", "gid", "msg_64", "at", "encrypted"],
     );
 }
 
@@ -175,12 +168,9 @@ fn method_name_constants_match_ts() {
     assert_eq!(FETCH_PENDING_WELCOMES, "welcome_take");
     assert_eq!(STORE_WELCOME, "welcome_store");
     assert_eq!(STORE_JOIN_REQUEST, "join_request_store");
-    assert_eq!(FETCH_PENDING_JOIN_REQUESTS, "join_request_take");
     assert_eq!(FETCH_MANY_PENDING_JOIN_REQUESTS, "join_request_take_many");
     assert_eq!(POST_GROUP_MESSAGE, "msg_post");
-    assert_eq!(FETCH_GROUP_MESSAGES, "msg_fetch");
     assert_eq!(FETCH_MANY_GROUP_MESSAGES, "msg_fetch_many");
-    assert_eq!(SUBSCRIBE_GROUP_MESSAGES, "msg_sub");
     assert_eq!(SUBSCRIBE_MANY_GROUP_MESSAGES, "msg_sub_many");
     assert_eq!(LIST_AVAILABLE_KEY_PACKAGES, "kp_list");
 }

@@ -328,10 +328,12 @@ async fn post_then_fetch_group_messages_round_trip() {
         .unwrap();
     assert_eq!(posted.cursor, 1);
     let fetched = a
-        .fetch_group_messages(
-            FetchGroupMessagesInput {
-                gid: "g".into(),
-                after: None,
+        .fetch_many_group_messages(
+            FetchManyGroupMessagesInput {
+                groups: vec![FetchGroupMessagesInput {
+                    gid: "g".into(),
+                    after: None,
+                }],
             },
             ALICE,
         )
@@ -340,13 +342,14 @@ async fn post_then_fetch_group_messages_round_trip() {
     assert_eq!(fetched.messages[0].cursor, 1);
     assert_eq!(fetched.messages[0].gid, "g");
     assert_eq!(fetched.messages[0].msg_64, base64_encode(b"hello"));
-    assert_eq!(fetched.messages[0].encrypted, Some(true));
 }
 
 #[tokio::test]
-async fn fetch_group_messages_rejects_non_positive_after_cursor() {
+async fn fetch_many_group_messages_rejects_non_positive_after_cursor() {
     // Parity with the TS wire schema `after: z.number().int().positive().optional()`:
-    // 0 and negatives are rejected; absent (None) and positive cursors are accepted.
+    // 0 and negatives are rejected in any element; absent (None) and positive
+    // cursors are accepted. The single-group wire tool was dropped in cordn
+    // 0.5, so the many path is the only fetch surface.
     let (a, _t) = adapter();
     a.post_group_message(
         PostGroupMessageInput {
@@ -357,53 +360,29 @@ async fn fetch_group_messages_rejects_non_positive_after_cursor() {
     )
     .unwrap();
 
-    for bad in [0, -3] {
-        let err = a
-            .fetch_group_messages(
-                FetchGroupMessagesInput {
+    let req = |after: Option<i64>| {
+        a.fetch_many_group_messages(
+            FetchManyGroupMessagesInput {
+                groups: vec![FetchGroupMessagesInput {
                     gid: "g".into(),
-                    after: Some(bad),
-                },
-                ALICE,
-            )
-            .unwrap_err();
+                    after,
+                }],
+            },
+            ALICE,
+        )
+    };
+
+    for bad in [0, -3] {
+        let err = req(Some(bad)).unwrap_err();
         assert!(
             matches!(err, cordn_server::AdapterError::InvalidInput(_)),
             "after={bad} should be rejected"
         );
     }
 
-    // The multi-group path rejects a non-positive cursor in any element too.
-    let err = a
-        .fetch_many_group_messages(
-            FetchManyGroupMessagesInput {
-                groups: vec![FetchGroupMessagesInput {
-                    gid: "g".into(),
-                    after: Some(0),
-                }],
-            },
-            ALICE,
-        )
-        .unwrap_err();
-    assert!(matches!(err, cordn_server::AdapterError::InvalidInput(_)));
-
     // Sanity: None and a positive cursor still work.
-    a.fetch_group_messages(
-        FetchGroupMessagesInput {
-            gid: "g".into(),
-            after: None,
-        },
-        ALICE,
-    )
-    .unwrap();
-    a.fetch_group_messages(
-        FetchGroupMessagesInput {
-            gid: "g".into(),
-            after: Some(1),
-        },
-        ALICE,
-    )
-    .unwrap();
+    req(None).unwrap();
+    req(Some(1)).unwrap();
 }
 
 #[tokio::test]
@@ -446,7 +425,7 @@ async fn remove_key_packages_enforces_ownership() {
 // ── streaming subscribe ─────────────────────────────────────────────
 
 #[tokio::test]
-async fn subscribe_streams_backlog_then_live_then_closes() {
+async fn subscribe_many_streams_backlog_then_live_then_closes() {
     let (a, _t) = adapter();
     // Backlog first.
     a.post_group_message(
@@ -463,12 +442,16 @@ async fn subscribe_streams_backlog_then_live_then_closes() {
 
     // Run the streaming subscribe concurrently with a driver that posts a live
     // message then deactivates the sink so the live loop exits. Same task (no
-    // spawn) so the local sink borrow is fine.
+    // spawn) so the local sink borrow is fine. The single-group wire tool was
+    // dropped in cordn 0.5; the many path (here with one group) is the only
+    // subscribe surface and must still replay backlog before live delivery.
     let a_clone = a.clone();
-    let subscribe = a.subscribe_group_messages(
-        SubscribeGroupMessagesInput {
-            gid: "g".into(),
-            after: None,
+    let subscribe = a.subscribe_many_group_messages(
+        SubscribeManyGroupMessagesInput {
+            groups: vec![FetchGroupMessagesInput {
+                gid: "g".into(),
+                after: None,
+            }],
         },
         ALICE,
         sink_ref,

@@ -56,7 +56,6 @@ pub struct AppendGroupMessageParams {
     pub group_id: String,
     pub opaque_message: Vec<u8>,
     pub created_at: i64,
-    pub encrypted: bool,
 }
 
 /// Storage instances are owned by a single coordinator instance.

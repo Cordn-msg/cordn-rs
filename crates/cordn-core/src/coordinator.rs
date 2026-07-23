@@ -387,7 +387,6 @@ impl Coordinator {
                 group_id: input.group_id.clone(),
                 opaque_message: input.opaque_message,
                 created_at: (self.now)(),
-                encrypted: true,
             })?;
         self.publish_live(&record);
         Ok(record)

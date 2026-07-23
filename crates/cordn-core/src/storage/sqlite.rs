@@ -119,8 +119,7 @@ const GROUP_SCHEMA_SQL: &str = "
         cursor INTEGER NOT NULL,
         group_id TEXT NOT NULL,
         opaque_message BLOB NOT NULL,
-        created_at INTEGER NOT NULL,
-        encrypted INTEGER NOT NULL DEFAULT 0
+        created_at INTEGER NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_messages_group_cursor_unique
         ON group_messages (group_id, cursor);
@@ -184,13 +183,12 @@ impl SqliteCoordinatorStorage {
 
         conn.execute_batch(GROUP_SCHEMA_SQL)?;
 
-        // Migration: add encrypted column (0 = legacy/unencrypted, 1 = encrypted).
-        if !has_column(conn, "group_messages", "encrypted")? {
-            conn.execute(
-                "ALTER TABLE group_messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
+        // Migration: drop the `encrypted` column. cordn 0.5 made delivery
+        // encrypted-only and removed the plaintext/encrypted distinction from
+        // the schema; the coordinator is opaque to payload contents. Existing
+        // DBs that still carry the column are left untouched (all reads use an
+        // explicit column list that no longer names it), mirroring the TS
+        // storage, which also neither creates nor drops it.
         // Migration: drop ephemeral_sender_pubkey (session-scoped transport
         // handle the coordinator never read; routing is by gid).
         if has_column(conn, "group_messages", "ephemeral_sender_pubkey")? {
@@ -270,7 +268,6 @@ fn row_to_group_message(row: &Row<'_>) -> rusqlite::Result<GroupMessageRecord> {
         group_id: row.get("group_id")?,
         opaque_message: row.get("opaque_message")?,
         created_at: row.get("created_at")?,
-        encrypted: row.get::<_, i64>("encrypted")? != 0,
     })
 }
 
@@ -663,15 +660,14 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
 
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO group_messages (cursor, group_id, opaque_message, created_at, encrypted) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO group_messages (cursor, group_id, opaque_message, created_at) \
+                 VALUES (?1, ?2, ?3, ?4)",
             )?;
             stmt.execute(params![
                 cursor,
                 &params.group_id,
                 &params.opaque_message,
                 params.created_at,
-                params.encrypted as i64,
             ])?;
         }
         {
@@ -688,7 +684,6 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             group_id: params.group_id,
             opaque_message: params.opaque_message,
             created_at: params.created_at,
-            encrypted: params.encrypted,
         })
     }
 
@@ -702,7 +697,7 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
         // statement serves both the Some- and None-cursor cases.
         let ac = after_cursor.unwrap_or(0);
         let mut stmt = conn.prepare_cached(
-            "SELECT cursor, group_id, opaque_message, created_at, encrypted \
+            "SELECT cursor, group_id, opaque_message, created_at \
                  FROM group_messages WHERE group_id = ?1 AND cursor > ?2 ORDER BY cursor ASC",
         )?;
         let rows = stmt.query_map(params![group_id, ac], row_to_group_message)?;
@@ -727,7 +722,7 @@ impl CoordinatorStorage for SqliteCoordinatorStorage {
             .join(", ");
         let sql = format!(
             "WITH requested(group_order, group_id, after_cursor) AS (VALUES {placeholders}) \
-             SELECT gm.cursor, gm.group_id, gm.opaque_message, gm.created_at, gm.encrypted \
+             SELECT gm.cursor, gm.group_id, gm.opaque_message, gm.created_at \
              FROM requested r JOIN group_messages gm \
                ON gm.group_id = r.group_id AND gm.cursor > r.after_cursor \
              ORDER BY r.group_order ASC, gm.cursor ASC"
@@ -827,10 +822,6 @@ mod tests {
         let conn = storage.conn.lock().unwrap();
 
         let gm_cols = table_columns(&conn, "group_messages").unwrap();
-        assert!(
-            gm_cols.iter().any(|c| c == "encrypted"),
-            "encrypted column added"
-        );
         assert!(!gm_cols.iter().any(|c| c == "epoch"), "epoch dropped");
         assert!(
             !gm_cols.iter().any(|c| c == "ephemeral_sender_pubkey"),

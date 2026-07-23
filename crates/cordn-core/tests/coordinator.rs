@@ -185,7 +185,7 @@ async fn maxage_cleanup_deletes_expired_welcomes_only() {
 // ── group messages: routing + opaque storage ────────────────────────
 
 #[tokio::test]
-async fn post_routes_by_gid_sets_encrypted_and_assigns_per_group_cursors() {
+async fn post_routes_by_gid_and_assigns_per_group_cursors() {
     let (coord, _tick) = coord();
     let a1 = post(&coord, "group-alpha", &[1]);
     let b1 = post(&coord, "group-beta", &[2]);
@@ -194,7 +194,6 @@ async fn post_routes_by_gid_sets_encrypted_and_assigns_per_group_cursors() {
     assert_eq!(a1.cursor, 1);
     assert_eq!(b1.cursor, 1);
     assert_eq!(a2.cursor, 2);
-    assert!(a1.encrypted);
 
     let after_a1 = coord.fetch_group_messages("group-alpha", Some(1)).unwrap();
     assert_eq!(after_a1.len(), 1);

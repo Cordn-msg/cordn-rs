@@ -76,7 +76,9 @@ pub struct ConsumedJoinRequestWithGroupRef {
     pub created_at: i64,
 }
 
-/// One opaque MLS group message in a per-group ordered log.
+/// One opaque MLS group message in a per-group ordered log. Delivery is
+/// encrypted-only (cordn 0.5+): the payload is opaque to the coordinator and
+/// there is no longer a plaintext/encrypted distinction to persist.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupMessageRecord {
     /// Per-group monotonic cursor. Never global across groups: different groups
@@ -87,7 +89,6 @@ pub struct GroupMessageRecord {
     pub opaque_message: Vec<u8>,
     /// Unix milliseconds.
     pub created_at: i64,
-    pub encrypted: bool,
 }
 
 /// Input to a single-group message fetch. `after_cursor` is scoped to

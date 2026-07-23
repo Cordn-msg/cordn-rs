@@ -64,7 +64,6 @@ struct Mg {
     group_id: String,
     opaque_message_hex: String,
     created_at: i64,
-    encrypted: i64,
 }
 
 fn load_manifest() -> Manifest {
@@ -87,9 +86,9 @@ fn rust_reads_ts_written_db() {
     std::fs::copy(DB, &tmp).expect("copy fixture to temp");
 
     // (1) Opening runs the RS migrations over a TS-written schema. The TS
-    //     constructor already added `join_after_cursor`/`encrypted` and dropped
-    //     the legacy columns; RS migrations must therefore be no-ops here. If
-    //     this errors, the migration branches have diverged.
+    //     constructor already added `join_after_cursor` and dropped the legacy
+    //     columns; RS migrations must therefore be no-ops here. If this errors,
+    //     the migration branches have diverged.
     let storage = SqliteCoordinatorStorage::open(
         Some(tmp.to_str().expect("temp path is utf-8")),
         cordn_core::Synchronous::Normal,
@@ -157,8 +156,8 @@ fn rust_reads_ts_written_db() {
         assert_eq!(rs.created_at, j.created_at);
     }
 
-    // (5) group_messages — per-group fetch, asserting the opaque blob, the
-    //     encrypted 0/1 → bool mapping, and per-group cursor density.
+    // (5) group_messages — per-group fetch, asserting the opaque blob and
+    //     per-group cursor density.
     let mut by_group: HashMap<String, Vec<&Mg>> = HashMap::new();
     for g in &m.group_messages {
         by_group.entry(g.group_id.clone()).or_default().push(g);
@@ -185,7 +184,6 @@ fn rust_reads_ts_written_db() {
                 "opaque_message"
             );
             assert_eq!(rs.created_at, e.created_at);
-            assert_eq!(rs.encrypted, e.encrypted != 0, "encrypted 0/1 -> bool");
         }
     }
 

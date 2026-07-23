@@ -31,7 +31,7 @@ Primary implementation areas (target layout):
 - `references/cordn/scripts/gen_key_packages.test.ts` — regenerates the
   `ts-mls` parser fixtures into `crates/cordn-core/tests/fixtures/`
 
-The TypeScript coordinator under `references/cordn/` (currently `0.4.0`) is the
+The TypeScript coordinator under `references/cordn/` (currently `0.5.1`) is the
 **parity source of truth**. Behavior, wire shapes, the SQLite schema, and the
 test coverage are all ported from it. `references/` trees are read-only.
 
@@ -189,8 +189,12 @@ Four layers — all four are required for the drop-in guarantee.
    TS `SqliteCoordinatorStorage` (`tests/fixtures/ts_written.db`, paired with
    its `ts_written.manifest.json`) and asserts every row — blobs, INTEGER
    booleans, NULL `join_after_cursor`, the `publication_event_json` column, and
-   per-group cursor allocation — reads back byte-for-byte. Regenerate the
-   fixture pair from `references/cordn` with
+   per-group cursor allocation — reads back byte-for-byte. The Rust test no
+   longer asserts the legacy `encrypted` column (TS 0.5 dropped it; see the
+   migration note below). The currently committed fixture predates 0.5 and
+   still carries that column harmlessly (Rust ignores it); to regenerate
+   against TS 0.5+, first update `references/cordn/scripts/gen_ts_db.test.ts`
+   to stop inserting/selecting/asserting `encrypted`, then run
    `npx vitest run scripts/gen_ts_db.test.ts` whenever the TS schema or write
    path changes.
 
@@ -242,24 +246,29 @@ These invariants come from the TS `AGENTS.md` and are load-bearing.
   as a cursor within that group only.
 - `fetch_many_group_messages` must preserve bounded catch-up semantics with
   independent per-group cursors.
-- `subscribe_group_messages({ group_id, after_cursor })` must preserve the same
-  cursor semantics while **replaying backlog before live delivery**.
-- `subscribe_many_group_messages` must remain backwards-compatible with the
-  single-group subscription stream shape while preserving independent per-group
-  cursor semantics, including the per-group "emit only if `cursor > last_emitted`"
-  dedup that bridges backlog replay into the live stream.
+- `subscribe_group_messages({ group_id, after_cursor })` (a coordinator-core
+  method, **not** a wire tool — the single-group subscribe was dropped from
+  the wire in cordn 0.5) is live-tail only; it does not replay backlog.
+- `subscribe_many_group_messages` is the only subscription wire tool (cordn
+  0.5 dropped the single-group `msg_sub`). It must remain
+  backwards-compatible with the single-group subscription stream shape while
+  preserving independent per-group cursor semantics, including the per-group
+  "emit only if `cursor > last_emitted`" dedup that bridges backlog replay
+  into the live stream.
 - Observation (fetch) **never deletes**. Records are retired only by explicit
   `consumed` acks or the max-age ceiling.
 - Keep storage backends behaviorally aligned: changes in `in_memory.rs` and
   `sqlite.rs` require parity coverage in the storage tests.
-- **Pub/sub asymmetry (faithful to TS):** single-group
-  `subscribe_group_messages` is **live-tail only** — it does not replay
-  backlog; the adapter fetches backlog separately and dedups by cursor.
-  `subscribe_many_group_messages` merges backlog+live into one stream with
-  per-group cursor dedup, buffering any live messages that arrive during the
-  backlog fetch and flushing them after the backlog so order is always
-  backlog-then-live. The single-group path returns an `mpsc::UnboundedReceiver`
-  (via `GroupMessageSubscription::recv`); the multi-group path fills it during
+- **Pub/sub asymmetry (faithful to TS):** only
+  `subscribe_many_group_messages` is exposed on the wire (cordn 0.5 dropped
+  the single-group `msg_sub`). The coordinator-core
+  `subscribe_group_messages` still exists as a live-tail-only primitive used
+  internally (and by the TS CLI), but the adapter no longer wraps it: it does
+  not replay backlog. `subscribe_many_group_messages` merges backlog+live
+  into one stream with per-group cursor dedup, buffering any live messages
+  that arrive during the backlog fetch and flushing them after the backlog so
+  order is always backlog-then-live. The multi-group path fills the
+  `mpsc::UnboundedReceiver` (via `GroupMessageSubscription::recv`) during
   setup.
 
 ## Storage / DB parity (the drop-in contract)
@@ -271,9 +280,13 @@ Port it byte-for-byte, including:
 
 - Per-group cursor allocation: `group_routing.last_message_cursor + 1`, never a
   table-global sequence.
-- The migration logic that adds `join_after_cursor` and `encrypted`, and drops
-  legacy `epoch`, `ephemeral_sender_pubkey`, `latest_handshake_epoch` columns
-  when present on existing DBs (so we can read TS-written DBs).
+- The migration logic that adds `join_after_cursor` and drops legacy
+  `epoch`, `ephemeral_sender_pubkey`, `latest_handshake_epoch` columns when
+  present on existing DBs (so we can read TS-written DBs). The TS 0.5
+  encrypted-only refactor removed the `group_messages.encrypted` column; both
+  backends now neither create nor drop it, and existing DBs that still carry
+  it are ignored (all reads use an explicit column list that no longer names
+  it).
 - Refresh-in-place on join-request re-request: bump `created_at` and update
   `key_package_ref` for an existing `(group_id, requester_stable_pubkey)` so a
   re-request evades an admin's already-recorded consume ref.

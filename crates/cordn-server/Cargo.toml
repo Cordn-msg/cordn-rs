@@ -29,6 +29,10 @@ rmcp = { version = "1.8", features = ["server", "macros"], optional = true }
 schemars = { version = "1", optional = true }
 anyhow = { version = "1", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+# NIP-19 nprofile encoding for the startup banner. Already compiled transitively
+# (contextvm-sdk → nostr-sdk → nostr at 0.44.x), so this reuses an existing build
+# artifact rather than pulling a new one.
+nostr = { version = "0.44", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util", "macros", "rt", "time", "sync"] }
@@ -36,7 +40,7 @@ hex = "0.4"
 
 [features]
 default = []
-server = ["dep:contextvm-sdk", "dep:rmcp", "dep:schemars", "dep:anyhow", "dep:tracing-subscriber", "cordn-core/schemars"]
+server = ["dep:contextvm-sdk", "dep:rmcp", "dep:schemars", "dep:anyhow", "dep:tracing-subscriber", "dep:nostr", "cordn-core/schemars"]
 
 [[bin]]
 name = "cordn-server"

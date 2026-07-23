@@ -18,12 +18,9 @@ pub mod methods {
     pub const FETCH_PENDING_WELCOMES: &str = "welcome_take";
     pub const STORE_WELCOME: &str = "welcome_store";
     pub const STORE_JOIN_REQUEST: &str = "join_request_store";
-    pub const FETCH_PENDING_JOIN_REQUESTS: &str = "join_request_take";
     pub const FETCH_MANY_PENDING_JOIN_REQUESTS: &str = "join_request_take_many";
     pub const POST_GROUP_MESSAGE: &str = "msg_post";
-    pub const FETCH_GROUP_MESSAGES: &str = "msg_fetch";
     pub const FETCH_MANY_GROUP_MESSAGES: &str = "msg_fetch_many";
-    pub const SUBSCRIBE_GROUP_MESSAGES: &str = "msg_sub";
     pub const SUBSCRIBE_MANY_GROUP_MESSAGES: &str = "msg_sub_many";
 }
 
@@ -188,20 +185,6 @@ pub struct ConsumedJoinRequestRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct FetchPendingJoinRequestsInput {
-    pub gid: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consumed: Option<Vec<ConsumedJoinRequestRef>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct FetchPendingJoinRequestsOutput {
-    pub requests: Vec<JoinRequest>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct FetchManyPendingJoinRequestsGroupInput {
     pub gid: String,
 }
@@ -269,8 +252,6 @@ pub struct GroupMessage {
     pub gid: String,
     pub msg_64: String,
     pub at: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encrypted: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,20 +267,6 @@ pub struct FetchManyGroupMessagesInput {
 }
 
 // ── subscriptions ───────────────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SubscribeGroupMessagesInput {
-    pub gid: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct SubscribeGroupMessagesOutput {
-    pub subscribed: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

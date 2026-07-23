@@ -353,37 +353,6 @@ impl CoordinatorAdapter {
         })
     }
 
-    pub fn fetch_pending_join_requests(
-        &self,
-        input: FetchPendingJoinRequestsInput,
-        client_pubkey: &str,
-    ) -> Result<FetchPendingJoinRequestsOutput, AdapterError> {
-        self.assert_within_rate_limit(client_pubkey, "fetchPendingJoinRequests")?;
-        require_non_empty(&input.gid, "gid")?;
-        let consumed: Vec<cordn_core::ConsumedJoinRequestRef> = input
-            .consumed
-            .unwrap_or_default()
-            .iter()
-            .map(|c| cordn_core::ConsumedJoinRequestRef {
-                requester_stable_pubkey: c.pk.clone(),
-                created_at: c.at,
-            })
-            .collect();
-        let records = self
-            .coordinator
-            .fetch_pending_join_requests(&input.gid, &consumed)?;
-        Ok(FetchPendingJoinRequestsOutput {
-            requests: records
-                .iter()
-                .map(|r| JoinRequest {
-                    pk: r.requester_stable_pubkey.clone(),
-                    kp_ref: r.key_package_ref.clone(),
-                    at: r.created_at,
-                })
-                .collect(),
-        })
-    }
-
     pub fn fetch_many_pending_join_requests(
         &self,
         input: FetchManyPendingJoinRequestsInput,
@@ -444,20 +413,6 @@ impl CoordinatorAdapter {
         })
     }
 
-    pub fn fetch_group_messages(
-        &self,
-        input: FetchGroupMessagesInput,
-        client_pubkey: &str,
-    ) -> Result<FetchGroupMessagesOutput, AdapterError> {
-        self.assert_within_rate_limit(client_pubkey, "fetchGroupMessages")?;
-        require_non_empty(&input.gid, "gid")?;
-        require_positive_cursor(input.after, "after")?;
-        let records = self
-            .coordinator
-            .fetch_group_messages(&input.gid, input.after)?;
-        Ok(map_group_messages(&records))
-    }
-
     pub fn fetch_many_group_messages(
         &self,
         input: FetchManyGroupMessagesInput,
@@ -485,63 +440,6 @@ impl CoordinatorAdapter {
     }
 
     // ── subscriptions ────────────────────────────────────────────────
-
-    /// Replay backlog then stream live for a single group. The coordinator's
-    /// single-group subscribe is live-tail only, so the backlog is fetched
-    /// separately and streamed first (dedup by cursor against any live records
-    /// that raced in).
-    pub async fn subscribe_group_messages(
-        &self,
-        input: SubscribeGroupMessagesInput,
-        client_pubkey: &str,
-        sink: &dyn MessageSink,
-    ) -> Result<SubscribeGroupMessagesOutput, AdapterError> {
-        self.assert_within_rate_limit(client_pubkey, "subscribeGroupMessages")?;
-        require_non_empty(&input.gid, "gid")?;
-        require_positive_cursor(input.after, "after")?;
-
-        let mut subscription = self.coordinator.subscribe_group_messages(&input.gid);
-        let backlog = self
-            .coordinator
-            .fetch_group_messages(&input.gid, input.after)?;
-        let mut last_emitted = input.after.unwrap_or(0);
-
-        sink.start().await;
-        for record in &backlog {
-            if !sink.is_active() {
-                break;
-            }
-            sink.write(wire_message(record)).await;
-            last_emitted = record.cursor;
-        }
-
-        loop {
-            let recv = subscription.recv();
-            tokio::pin!(recv);
-            tokio::select! {
-                record = &mut recv => {
-                    let Some(record) = record else { break };
-                    if record.cursor <= last_emitted {
-                        continue;
-                    }
-                    last_emitted = record.cursor;
-                    if !sink.write(wire_message(&record)).await {
-                        break;
-                    }
-                }
-                _ = tokio::time::sleep(SINK_ACTIVE_POLL) => {
-                    if !sink.is_active() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if sink.is_active() {
-            sink.close().await;
-        }
-        Ok(SubscribeGroupMessagesOutput { subscribed: true })
-    }
 
     /// Stream backlog+live for multiple groups (the coordinator merges them).
     pub async fn subscribe_many_group_messages(
@@ -702,7 +600,6 @@ fn wire_message_struct(record: &cordn_core::GroupMessageRecord) -> GroupMessage 
         gid: record.group_id.clone(),
         msg_64: b64_encode(&record.opaque_message),
         at: record.created_at,
-        encrypted: Some(record.encrypted),
     }
 }
 

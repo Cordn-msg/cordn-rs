@@ -85,7 +85,6 @@ fn append(
             group_id: group_id.to_string(),
             opaque_message,
             created_at,
-            encrypted: true,
         })
         .unwrap()
 }
@@ -378,27 +377,22 @@ fn stores_group_messages_opaquely_and_routes_per_group() {
 }
 
 #[test]
-fn stores_encrypted_messages_with_the_encrypted_flag() {
+fn stores_and_round_trips_an_opaque_group_message() {
     each_backend(|storage| {
         let bytes = vec![0xde, 0xad, 0xbe, 0xef];
         let posted = storage
             .append_group_message(AppendGroupMessageParams {
-                group_id: "encrypted-topic".to_string(),
+                group_id: "opaque-topic".to_string(),
                 opaque_message: bytes.clone(),
                 created_at: 100,
-                encrypted: true,
             })
             .unwrap();
-        assert_eq!(posted.group_id, "encrypted-topic");
-        assert!(posted.encrypted);
+        assert_eq!(posted.group_id, "opaque-topic");
         assert_eq!(posted.opaque_message, bytes);
         assert_eq!(posted.cursor, 1);
 
-        let fetched = storage
-            .fetch_group_messages("encrypted-topic", None)
-            .unwrap();
+        let fetched = storage.fetch_group_messages("opaque-topic", None).unwrap();
         assert_eq!(fetched.len(), 1);
-        assert!(fetched[0].encrypted);
         assert_eq!(fetched[0].opaque_message, bytes);
     });
 }
@@ -416,7 +410,6 @@ fn interleaves_messages_on_a_shared_per_group_cursor_sequence() {
             fetched.iter().map(|m| m.cursor).collect::<Vec<_>>(),
             vec![1, 2]
         );
-        assert!(fetched.iter().all(|m| m.encrypted));
     });
 }
 

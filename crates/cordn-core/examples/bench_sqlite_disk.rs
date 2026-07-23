@@ -36,7 +36,6 @@ fn run(path: &str, sync: Synchronous, n: usize, msg_bytes: usize) -> f64 {
                 group_id: "g".into(),
                 opaque_message: payload.clone(),
                 created_at: i as i64,
-                encrypted: true,
             })
             .unwrap();
     }

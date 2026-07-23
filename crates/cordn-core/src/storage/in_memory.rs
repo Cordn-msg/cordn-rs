@@ -390,7 +390,6 @@ impl CoordinatorStorage for InMemoryCoordinatorStorage {
             group_id,
             opaque_message,
             created_at,
-            encrypted,
         } = params;
         let log = inner
             .groups
@@ -403,7 +402,6 @@ impl CoordinatorStorage for InMemoryCoordinatorStorage {
             group_id,
             opaque_message,
             created_at,
-            encrypted,
         };
         log.messages.push(record.clone());
         Ok(record)

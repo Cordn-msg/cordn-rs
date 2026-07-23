@@ -18,10 +18,9 @@ use contextvm_sdk::transport::open_stream::OpenStreamWriter;
 use contextvm_sdk::transport::server::{ClientPubkey, InboundEvent};
 
 use cordn_core::contracts::{
-    ConsumeKeyPackageInput, FetchGroupMessagesInput, FetchManyGroupMessagesInput,
-    FetchManyPendingJoinRequestsInput, FetchPendingJoinRequestsInput, FetchPendingWelcomesInput,
-    NostrEvent, PostGroupMessageInput, PublishKeyPackageInput, RemoveKeyPackagesInput,
-    StoreJoinRequestInput, StoreWelcomeInput, SubscribeGroupMessagesInput,
+    ConsumeKeyPackageInput, FetchManyGroupMessagesInput, FetchManyPendingJoinRequestsInput,
+    FetchPendingWelcomesInput, NostrEvent, PostGroupMessageInput, PublishKeyPackageInput,
+    RemoveKeyPackagesInput, StoreJoinRequestInput, StoreWelcomeInput,
     SubscribeManyGroupMessagesInput,
 };
 
@@ -208,20 +207,6 @@ impl CordnServer {
         Ok(structured(out))
     }
 
-    #[tool(description = "Fetch pending join requests for a group.")]
-    async fn join_request_take(
-        &self,
-        Parameters(input): Parameters<FetchPendingJoinRequestsInput>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let pubkey = client_pubkey(&ctx)?;
-        let out = self
-            .adapter
-            .fetch_pending_join_requests(input, &pubkey)
-            .map_err(adapter_error)?;
-        Ok(structured(out))
-    }
-
     #[tool(description = "Fetch pending join requests for multiple groups in a single call.")]
     async fn join_request_take_many(
         &self,
@@ -250,20 +235,6 @@ impl CordnServer {
         Ok(structured(out))
     }
 
-    #[tool(description = "Fetch queued MLS opaque group messages by group and optional cursor.")]
-    async fn msg_fetch(
-        &self,
-        Parameters(input): Parameters<FetchGroupMessagesInput>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let pubkey = client_pubkey(&ctx)?;
-        let out = self
-            .adapter
-            .fetch_group_messages(input, &pubkey)
-            .map_err(adapter_error)?;
-        Ok(structured(out))
-    }
-
     #[tool(
         description = "Fetch queued MLS opaque group messages for multiple groups with independent optional cursors."
     )]
@@ -276,24 +247,6 @@ impl CordnServer {
         let out = self
             .adapter
             .fetch_many_group_messages(input, &pubkey)
-            .map_err(adapter_error)?;
-        Ok(structured(out))
-    }
-
-    #[tool(
-        description = "Replay and stream MLS opaque group messages by group and optional cursor."
-    )]
-    async fn msg_sub(
-        &self,
-        Parameters(input): Parameters<SubscribeGroupMessagesInput>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let pubkey = client_pubkey(&ctx)?;
-        let sink = stream_writer(&ctx)?;
-        let out = self
-            .adapter
-            .subscribe_group_messages(input, &pubkey, &sink)
-            .await
             .map_err(adapter_error)?;
         Ok(structured(out))
     }
