@@ -300,7 +300,7 @@ dependencies = [
 
 [[package]]
 name = "cordn-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "hex",
  "indexmap",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "cordn-server"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
