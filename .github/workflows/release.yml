@@ -38,6 +38,37 @@ jobs:
           name: cordn-server-${{ matrix.target }}
           path: cordn-server-${{ matrix.target }}.tar.gz
 
+  # Multi-arch Docker image → GHCR. Independent Rust build (no dependency on
+  # the `build` job's release artifacts), so it runs in parallel.
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: tags
+        id: t
+        run: |
+          repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          v="${GITHUB_REF_NAME#v}"
+          echo "tags=ghcr.io/${repo}/cordn-server:${v},ghcr.io/${repo}/cordn-server:latest" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.t.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   release:
     needs: build
     runs-on: ubuntu-latest

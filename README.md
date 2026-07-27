@@ -41,6 +41,30 @@ tar xzf cordn-server-<target>.tar.gz
 ./cordn-server
 ```
 
+Or use the one-line installer (verifies the SHA256 checksum; linux/amd64 +
+linux/arm64). Set `PREFIX` to install elsewhere, e.g. `PREFIX=$HOME/.local/bin`:
+
+```bash
+sh scripts/install.sh
+```
+
+### Docker
+
+A multi-arch image (`linux/amd64`, `linux/arm64`) is published to GHCR on every
+release tag. The server dials relays over wss — there is no port to publish.
+
+```bash
+docker run -d --name cordn \
+  -e CORDN_SERVER_PRIVATE_KEY=<hex> \
+  -e CORDN_RELAY_URLS=wss://relay.contextvm.org \
+  -e CORDN_STORAGE_BACKEND=sqlite \
+  -e CORDN_SQLITE_PATH=/data/cordn.sqlite \
+  -v cordn-data:/data \
+  ghcr.io/cordn-msg/cordn-rs/cordn-server:latest
+```
+
+Defaults (safe to omit): ephemeral server key, in-memory storage.
+
 ### Build from source
 
 Requires Rust stable (MSRV **1.88**).
