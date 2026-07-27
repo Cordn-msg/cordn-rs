@@ -316,6 +316,20 @@ cross-reads are safe.
 - Runtime configuration is environment-driven (see Development workflow).
 - The server entrypoint prints a startup banner (pubkey, nprofile, relay list,
   cordn.net URL) to stdout, then structured logs. Shutdown on `SIGTERM`/`SIGINT`.
+- **Releases and versioning.** The workspace `version` is the **TS-parity
+  version** — it tracks `cordn` upstream and only moves when TS moves.
+  - **Parity releases** (`make patch|minor|major` → `vX.Y.Z`): bump the cargo
+    version to match a new `cordn` release. The only releases that change the
+    binary version.
+  - **Packaging-only releases** (Docker image, installer updates — no behavior
+    change): tag `vX.Y.Z-<label>.N` (e.g. `v0.5.1-next.0`, `v0.5.1-rs.1`)
+    **without** bumping the cargo version. The suffix is a release label, never
+    a library version, so `cordn-server --version` still reports the parity
+    version. It parses as a semver pre-release (lower precedence) — harmless,
+    and it makes GitHub treat the tag as a prerelease, leaving the last clean
+    `vX.Y.Z` as the "latest release."
+  Both tag shapes match `release.yml`'s `v*` trigger and publish binaries + the
+  multi-arch GHCR image; `:latest` follows the newest tag of either kind.
 
 ## Pull request guidelines
 

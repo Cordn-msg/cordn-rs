@@ -1,6 +1,6 @@
 # cordn-rs
 
-A native Rust port of the [`cordn`](https://github.com/ContextVM/cordn) MLS
+A native Rust port of the [`cordn`](https://github.com/Cordn-msg/cordn) MLS
 delivery coordinator — a ContextVM/MCP server that stores and delivers MLS key
 packages, welcomes, join requests, and per-group opaque message streams.
 
