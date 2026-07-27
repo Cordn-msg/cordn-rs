@@ -5,11 +5,11 @@ delivery coordinator — a ContextVM/MCP server that stores and delivers MLS key
 packages, welcomes, join requests, and per-group opaque message streams.
 
 > **Status:** the port is **complete and parity-asserted**. It is a drop-in
-> replacement for the TypeScript coordinator (`cordn` `0.4.0`): the same wire
+> replacement for the TypeScript coordinator (`cordn`): the same wire
 > shapes, the same SQLite schema, and a database written by the TS coordinator is
 > readable byte-for-byte by this one (proven by
 > [`crates/cordn-core/tests/db_cross_read.rs`](./crates/cordn-core/tests/db_cross_read.rs)).
-> This release tracks `cordn` `0.4.0` protocol/DB compatibility.
+> This release tracks the current `cordn` release's protocol/DB compatibility.
 
 ## Highlights
 
@@ -181,9 +181,9 @@ cargo test                               # all tests
 Releases are tag-driven. From a clean working tree:
 
 ```bash
-make patch   # 0.4.0 → 0.4.1
-make minor   # 0.4.0 → 0.5.0
-make major   # 0.4.0 → 1.0.0
+make patch   # X.Y.Z → X.Y.(Z+1)
+make minor   # X.Y.Z → X.(Y+1).0
+make major   # X.Y.Z → (X+1).0.0
 ```
 
 Each target bumps the workspace version, refreshes `Cargo.lock`, commits, tags
