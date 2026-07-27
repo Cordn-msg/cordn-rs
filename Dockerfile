@@ -21,11 +21,15 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --no-create-home --uid 10001 cordn
+ && useradd --system --no-create-home --uid 10001 cordn \
+ && mkdir -p /data && chown cordn:cordn /data
 COPY --from=builder /cordn-server /usr/local/bin/cordn-server
 USER cordn
-# Safe defaults: ephemeral server key, in-memory storage. Override with -e or a
-# mounted .env (e.g. CORDN_SERVER_PRIVATE_KEY, CORDN_RELAY_URLS,
-# CORDN_STORAGE_BACKEND=sqlite, CORDN_SQLITE_PATH).
+# Safe defaults: ephemeral server key, in-memory storage. For SQLite persistence
+# set CORDN_STORAGE_BACKEND=sqlite; the DB path defaults to /data/cordn.sqlite
+# (below), and /data is owned by the cordn user so a named volume mounted there
+# is writable. For a bind mount, the host dir must be writable by uid 10001
+# (or run with --user $(id -u):$(id -g)).
 ENV CORDN_STORAGE_BACKEND=memory
+ENV CORDN_SQLITE_PATH=/data/cordn.sqlite
 ENTRYPOINT ["cordn-server"]

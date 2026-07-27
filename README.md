@@ -62,19 +62,22 @@ reads its env once at startup, so there is no `reload`.
 ### Docker
 
 A multi-arch image (`linux/amd64`, `linux/arm64`) is published to GHCR on every
-release tag. The server dials relays over wss — there is no port to publish.
+release tag. The server dials relays over wss — there is no port to publish. It
+runs as a non-root user (uid 10001) and stores the SQLite DB at `/data`.
 
 ```bash
 docker run -d --name cordn \
   -e CORDN_SERVER_PRIVATE_KEY=<hex> \
   -e CORDN_RELAY_URLS=wss://relay.contextvm.org \
   -e CORDN_STORAGE_BACKEND=sqlite \
-  -e CORDN_SQLITE_PATH=/data/cordn.sqlite \
   -v cordn-data:/data \
   ghcr.io/cordn-msg/cordn-rs/cordn-server:latest
 ```
 
-Defaults (safe to omit): ephemeral server key, in-memory storage.
+Defaults (safe to omit): ephemeral server key, in-memory storage. A named
+volume inherits the image's `/data` ownership. For a **bind mount**
+(`-v /host/dir:/data`) the host dir must be writable by uid 10001 — or pass
+`--user $(id -u):$(id -g)` so the container shares your uid.
 
 ### Build from source
 
