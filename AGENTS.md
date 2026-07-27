@@ -191,12 +191,22 @@ Four layers — all four are required for the drop-in guarantee.
    booleans, NULL `join_after_cursor`, the `publication_event_json` column, and
    per-group cursor allocation — reads back byte-for-byte. The Rust test no
    longer asserts the legacy `encrypted` column (TS 0.5 dropped it; see the
-   migration note below). The currently committed fixture predates 0.5 and
-   still carries that column harmlessly (Rust ignores it); to regenerate
-   against TS 0.5+, first update `references/cordn/scripts/gen_ts_db.test.ts`
-   to stop inserting/selecting/asserting `encrypted`, then run
-   `npx vitest run scripts/gen_ts_db.test.ts` whenever the TS schema or write
-   path changes.
+   migration note below). The committed fixture is regenerated against TS 0.5+
+   (the `group_messages.encrypted` column is gone); the generator script
+   `references/cordn/scripts/gen_ts_db.test.ts` no longer inserts/selects it.
+   Regenerate whenever the TS schema or write path changes:
+   `npx vitest run scripts/gen_ts_db.test.ts` from `references/cordn`.
+
+   **The generator scripts are untracked.**
+   `references/cordn/scripts/gen_ts_db.test.ts` and `gen_key_packages.test.ts`
+   are cordn-rs test infrastructure but are **not in this repo** — `references/`
+   is gitignored (it holds clones of `cordn`, `openmls`, `rs-sdk`), and they are
+   not committed upstream to `cordn-msg/cordn` either. They survive only in the
+   local `references/cordn` working tree. Regenerating fixtures therefore needs
+   a checkout of `cordn-msg/cordn` at `references/cordn` with these scripts
+   present (they import the TS source + its `node_modules`). Losing
+   `references/cordn` loses the scripts — back them up, or upstream them to
+   `cordn-msg/cordn` if that fragility starts to hurt.
 
 Commands:
 
