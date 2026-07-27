@@ -42,11 +42,22 @@ tar xzf cordn-server-<target>.tar.gz
 ```
 
 Or use the one-line installer (verifies the SHA256 checksum; linux/amd64 +
-linux/arm64). Set `PREFIX` to install elsewhere, e.g. `PREFIX=$HOME/.local/bin`:
+linux/arm64):
 
 ```bash
-sh scripts/install.sh
+# binary only (default PREFIX=/usr/local/bin needs sudo)
+curl -fsSL https://raw.githubusercontent.com/Cordn-msg/cordn-rs/master/scripts/install.sh | sudo sh
+# ...or a user-local install, no sudo:
+curl -fsSL https://raw.githubusercontent.com/Cordn-msg/cordn-rs/master/scripts/install.sh | PREFIX=$HOME/.local/bin sh
+
+# binary + hardened systemd service (root + systemd):
+curl -fsSL https://raw.githubusercontent.com/Cordn-msg/cordn-rs/master/scripts/install.sh | sudo sh -s -- --service
 ```
+
+For production, pin to a release tag instead of `master` (swap `master` for
+`refs/tags/vX.Y.Z`) so a bad commit can't reach you. Config edits to
+`/etc/cordn/cordn.env` are applied with `systemctl restart cordn` — the server
+reads its env once at startup, so there is no `reload`.
 
 ### Docker
 

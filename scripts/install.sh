@@ -126,6 +126,7 @@ EOF
   config:  $ENVFILE
   data:    $DATA
   logs:    journalctl -u cordn -f
+  apply config edits: systemctl restart cordn   # no reload: env is read once at startup
   remove:  systemctl disable --now cordn && rm -f $UNIT && systemctl daemon-reload
 EOF
 }
@@ -172,7 +173,11 @@ curl -fsSL -O "$BASE/SHA256SUMS"
 sha256sum -c --ignore-missing SHA256SUMS
 tar xzf "cordn-server-$TARGET.tar.gz"
 
-mkdir -p "$PREFIX"
+mkdir -p "$PREFIX" 2>/dev/null || true
+if [ ! -w "$PREFIX" ]; then
+  echo "$PREFIX is not writable — re-run with sudo, or set PREFIX=\$HOME/.local/bin" >&2
+  exit 1
+fi
 install -m 0755 cordn-server "$PREFIX/cordn-server"
 echo "✓ binary: $PREFIX/cordn-server"
 
